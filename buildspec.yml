@@ -1,0 +1,78 @@
+version: 0.2
+
+env:
+  variables:
+    DOMAIN: "nextwork"
+    DOMAIN_OWNER: "211125558972"
+    REGION: "us-east-1"
+    REPOSITORY: "nextwork-repo"
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto8
+    commands:
+      - echo "Installing Maven..."
+      - yum install -y maven jq
+
+      # ✅ Ensure CodeArtifact domain exists
+      - echo "Checking CodeArtifact domain..."
+      - |
+        if ! aws codeartifact describe-domain --domain $DOMAIN --region $REGION >/dev/null 2>&1; then
+          echo "Domain $DOMAIN not found. Creating..."
+          aws codeartifact create-domain --domain $DOMAIN --region $REGION
+        else
+          echo "Domain $DOMAIN already exists."
+        fi
+
+      # ✅ Ensure CodeArtifact repository exists
+      - echo "Checking CodeArtifact repository..."
+      - |
+        if ! aws codeartifact describe-repository --domain $DOMAIN --repository $REPOSITORY --region $REGION >/dev/null 2>&1; then
+          echo "Repository $REPOSITORY not found. Creating..."
+          aws codeartifact create-repository --domain $DOMAIN --domain-owner $DOMAIN_OWNER \
+            --repository $REPOSITORY --region $REGION
+        else
+          echo "Repository $REPOSITORY already exists."
+        fi
+
+      # ✅ Generate token
+      - echo "Generating CodeArtifact auth token..."
+      - |
+        export CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token \
+          --domain $DOMAIN \
+          --domain-owner $DOMAIN_OWNER \
+          --region $REGION \
+          --query authorizationToken \
+          --output text)
+      - echo "CODEARTIFACT_AUTH_TOKEN length: ${#CODEARTIFACT_AUTH_TOKEN}"
+
+      # ✅ Fail if token is empty
+      - |
+        if [ -z "$CODEARTIFACT_AUTH_TOKEN" ]; then 
+          echo "❌ Failed to retrieve CodeArtifact token"; 
+          exit 1; 
+        fi
+
+      # ✅ Fail if settings.xml is missing
+      - |
+        if [ ! -f settings.xml ]; then 
+          echo "❌ settings.xml not found in project root"; 
+          exit 1; 
+        fi
+
+  pre_build:
+    commands:
+      - echo "Refreshing CodeArtifact auth token..."
+      - |
+        export CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token \
+          --domain $DOMAIN \
+          --domain-owner $DOMAIN_OWNER \
+          --region $REGION \
+          --query authorizationToken \
+          --output text)
+
+  build:
+    commands:
+      - echo "Compiling the Maven project..."
+      - mvn -s settings.xml clean compile package
